@@ -178,10 +178,15 @@ async function waitForPublishedUrl(publishedUrl) {
 
 function assertToolSuccess(result, fallbackMessage) {
   const text = readToolText(result);
-  if (result?.isError || /^\s*❌/u.test(text) || /"error"\s*:/i.test(text)) {
+  if (result?.isError || /^\s*❌/u.test(text) || /ошибка/i.test(text) || /prohibited file name/i.test(text) || /"error"\s*:/i.test(text)) {
     throw new Error(text || fallbackMessage);
   }
   return result;
+}
+
+function buildFtpFileName(product, operationId) {
+  const productId = String(product.productId || "item").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 24) || "item";
+  return `ai-${productId}-${operationId.slice(0, 8)}.html`;
 }
 
 async function callUcozTool(name, args) {
@@ -234,13 +239,13 @@ export async function publishLandingToUcoz({ product, content, html }) {
   const slug = `${baseSlug}-${operationId.slice(0, 8)}`;
 
   if (publishMode !== "pages") {
-    const remotePath = `/ai-${slug}.html`;
+    const remotePath = buildFtpFileName(product, operationId);
     const result = assertToolSuccess(await callUcozTool("ftp_tool", {
       action: "write",
       filepath: remotePath,
       content: html
     }), "uCoz FTP не смог записать лендинг.");
-    const publishedUrl = `${normalizeSiteUrl()}${remotePath}`;
+    const publishedUrl = `${normalizeSiteUrl()}/${remotePath}`;
 
     const verification = await waitForPublishedUrl(publishedUrl);
 

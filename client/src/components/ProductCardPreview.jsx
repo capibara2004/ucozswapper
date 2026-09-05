@@ -1,12 +1,9 @@
 import { useEffect, useState } from "react";
 import "./zenrows.css";
-
-function thumbnailUrl(imageUrl) {
-  return imageUrl.replace(/\/c\d+x\d+\//i, "/c246x328/");
-}
+import { getPriceLabel, thumbnailDisplayUrl, upgradeDisplayImageUrl } from "../lib/marketplace";
 
 export default function ProductCardPreview({ product }) {
-  const images = product.images || [];
+  const images = (product.images || []).map((image) => upgradeDisplayImageUrl(image, product));
   const characteristics = product.characteristics || [];
   const [activeIndex, setActiveIndex] = useState(0);
   const activeImage = images[activeIndex] || images[0];
@@ -35,7 +32,7 @@ export default function ProductCardPreview({ product }) {
             <div className="zenrows-thumbnails" aria-label="Фотографии товара">
               {images.map((image, index) => (
                 <button type="button" className={`zenrows-thumbnail-button ${index === activeIndex ? "is-active" : ""}`} key={image} onClick={() => setActiveIndex(index)} aria-label={`Показать фото ${index + 1}`} aria-pressed={index === activeIndex}>
-                  <img src={thumbnailUrl(image)} alt={`${product.title} — фото ${index + 1}`} loading="lazy" decoding="async" draggable="false" />
+                  <img src={thumbnailDisplayUrl(image, product)} alt={`${product.title} — фото ${index + 1}`} loading="lazy" decoding="async" draggable="false" />
                 </button>
               ))}
             </div>
@@ -49,7 +46,7 @@ export default function ProductCardPreview({ product }) {
               <dd className="zenrows-title-value">{product.title || "Не найдено"}</dd>
             </div>
             <div className="zenrows-data-item">
-              <dt>Цена без WB Кошелька</dt>
+              <dt>{getPriceLabel(product)}</dt>
               <dd className="zenrows-price-value">{product.priceWithoutWallet || product.price || "Не найдено"}</dd>
             </div>
             <div className="zenrows-data-item">

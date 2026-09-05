@@ -1,5 +1,6 @@
 import { Check, ChevronLeft, ChevronRight, ExternalLink, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
+import { getDefaultCtaText, upgradeDisplayImageUrl } from "../lib/marketplace";
 import "./landing-preview.css";
 
 function splitDescription(value) {
@@ -26,8 +27,8 @@ function splitDescription(value) {
 }
 
 export default function LandingPreview({ product, content, warnings, publication, publishMessage }) {
-  const images = product.images || [];
-  const initialImage = content.hero?.image || images[0];
+  const images = (product.images || []).map((image) => upgradeDisplayImageUrl(image, product));
+  const initialImage = upgradeDisplayImageUrl(content.hero?.image, product) || images[0];
   const [activeIndex, setActiveIndex] = useState(Math.max(0, images.indexOf(initialImage)));
   const preset = content.design?.preset || "spotlight";
   const slider = content.design?.slider || "rail";
@@ -80,7 +81,7 @@ export default function LandingPreview({ product, content, warnings, publication
             <h1>{content.hero?.headline}</h1>
             <p className="landing-preview-subheadline">{content.hero?.subheadline}</p>
             <a href={content.cta?.url || product.productUrl} target="_blank" rel="noreferrer" className="landing-preview-cta">
-              {content.cta?.text || "Купить на WB"} <ExternalLink size={15} />
+              {content.cta?.text || getDefaultCtaText(product)} <ExternalLink size={15} />
             </a>
           </div>
         </section>

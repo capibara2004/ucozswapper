@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ExternalLink, History, ShoppingBag, X } from "lucide-react";
+import { getMarketplaceLinkLabel, upgradeDisplayImageUrl } from "../lib/marketplace";
 
 function compactId(value) {
   return value.length > 14 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
@@ -66,13 +67,13 @@ export default function LocalAccount({ account }) {
                 {account.publications.map((item) => (
                   <article key={item.operationId} className="group grid grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-[22px] border border-white/90 bg-white/68 p-3 shadow-[0_10px_30px_rgba(79,70,229,.06)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-[0_14px_38px_rgba(79,70,229,.10)]">
                     <div className="size-[72px] overflow-hidden rounded-[17px] bg-violet-50">
-                      {item.previewImage ? <img src={item.previewImage} alt="" className="size-full object-cover" /> : <span className="grid size-full place-items-center font-black text-violet-600">US</span>}
+                      {item.previewImage ? <img src={upgradeDisplayImageUrl(item.previewImage, item)} alt="" className="size-full object-cover" /> : <span className="grid size-full place-items-center font-black text-violet-600">US</span>}
                     </div>
                     <div className="min-w-0 py-0.5">
                       <p className="line-clamp-2 text-sm font-extrabold leading-5 text-slate-900">{item.title}</p>
                       <p className="mt-1 font-mono text-[10px] text-slate-400">#{item.operationId}</p>
                       <div className="mt-2.5 flex flex-wrap gap-2">
-                        <a href={item.productUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 transition hover:text-violet-700">WB <ExternalLink size={12} /></a>
+                        <a href={item.productUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 transition hover:text-violet-700">{getMarketplaceLinkLabel(item)} <ExternalLink size={12} /></a>
                         <a href={item.publishedUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-extrabold text-violet-700 transition hover:text-violet-900">Лендинг <ExternalLink size={12} /></a>
                       </div>
                     </div>

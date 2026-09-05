@@ -1,3 +1,5 @@
+import { detectMarketplaceFromUrl, getMarketplaceMeta, normalizeMarketplace } from "./marketplace";
+
 const STORAGE_KEY = "ucoz-market-page-account-v1";
 
 function createUserId() {
@@ -10,10 +12,24 @@ function persist(account) {
   return account;
 }
 
+function normalizePublication(record) {
+  const marketplace = normalizeMarketplace(record?.marketplace || record?.platform || detectMarketplaceFromUrl(record?.productUrl));
+  return {
+    ...record,
+    marketplace: marketplace || null,
+    platform: getMarketplaceMeta(marketplace).label
+  };
+}
+
 export function loadOrCreateLocalAccount() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-    if (stored?.userId && Array.isArray(stored.publications)) return stored;
+    if (stored?.userId && Array.isArray(stored.publications)) {
+      const normalizedPublications = stored.publications.map(normalizePublication);
+      const account = { ...stored, publications: normalizedPublications };
+      const changed = JSON.stringify(account) !== JSON.stringify(stored);
+      return changed ? persist(account) : account;
+    }
   } catch {
     // Corrupted browser data is replaced with a clean local account.
   }
@@ -27,6 +43,7 @@ export function loadOrCreateLocalAccount() {
 
 export function recordSuccessfulPublication(account, publication, product) {
   if (!publication?.published || !publication?.url || !publication?.operationId) return account;
+  const marketplace = normalizeMarketplace(product?.platform || detectMarketplaceFromUrl(product?.productUrl));
 
   const record = {
     operationId: publication.operationId,
@@ -36,7 +53,9 @@ export function recordSuccessfulPublication(account, publication, product) {
     productUrl: product.productUrl,
     publishedUrl: publication.url,
     productId: product.productId,
-    model: publication.model || null
+    model: publication.model || null,
+    marketplace: marketplace || null,
+    platform: getMarketplaceMeta(marketplace).label
   };
 
   return persist({

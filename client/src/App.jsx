@@ -20,6 +20,14 @@ import LocalAccount from "./components/LocalAccount";
 import UapiPublishModal from "./components/UapiPublishModal";
 import ZenRowsErrorModal from "./components/ZenRowsErrorModal";
 import { loadOrCreateLocalAccount, recordSuccessfulPublication } from "./lib/localAccount";
+import {
+  detectMarketplaceFromUrl,
+  getMarketplaceMeta,
+  isFallbackProductTitle,
+  normalizeMarketplace,
+  resolveMarketplace,
+  validateMarketplaceSelection
+} from "./lib/marketplace";
 import ucozSwapperLogo from "./assets/uCozSwapper-logotype.svg";
 
 function loadInitialTheme() {
@@ -60,11 +68,11 @@ function ProcessStep({ number, icon: Icon, title, description }) {
 function validateProduct(product) {
   const errors = [];
   if (!product) return ["ZenRows не вернул объект карточки."];
+  const marketplace = normalizeMarketplace(product.platform);
   if (product.sourceMode !== "zenrows") errors.push("Источник данных не подтверждён ZenRows.");
   if (product.sourceStatus !== "fetched") errors.push(`ZenRows вернул статус «${product.sourceStatus || "unknown"}», а не подтверждённую карточку.`);
-  if (!product.title || product.title === "Товар с Wildberries") errors.push("Не найдено название товара.");
-  if (!product.price) errors.push("Не найдена цена товара.");
-  if (!product.description) errors.push("Не найдено описание товара.");
+  if (!product.title || isFallbackProductTitle(product.title, marketplace)) errors.push("Не найдено название товара.");
+  if (!product.description && marketplace !== "avito") errors.push("Не найдено описание товара.");
   if (!product.productId || product.productId === "unknown") errors.push("Не найден ID товара.");
   if (!Array.isArray(product.images) || product.images.length === 0) errors.push("Не найдены фотографии товара.");
   return errors;
@@ -72,6 +80,7 @@ function validateProduct(product) {
 
 export default function App() {
   const [productUrl, setProductUrl] = useState("");
+  const [marketplaceMode, setMarketplaceMode] = useState("auto");
   const [product, setProduct] = useState(null);
   const [landing, setLanding] = useState(null);
   const [publication, setPublication] = useState(null);
@@ -101,10 +110,15 @@ export default function App() {
     setStatus("loading");
 
     try {
+      const marketplaceError = validateMarketplaceSelection(productUrl, marketplaceMode);
+      if (marketplaceError) throw new Error(marketplaceError);
+      const marketplace = resolveMarketplace(productUrl, marketplaceMode);
+      if (!marketplace) throw new Error("Не удалось определить маркетплейс по ссылке.");
+
       const response = await fetch("/api/parse", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productUrl, marketplace: "wb" })
+        body: JSON.stringify({ productUrl, marketplace })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "ZenRows не смог обработать карточку.");
@@ -118,14 +132,15 @@ export default function App() {
 
       setProduct(data.product);
       setStatus("success");
+      await generateLandingFromProduct(data.product);
     } catch (error) {
       setIssues({ errors: [error.message], warnings: [] });
       setStatus("error");
     }
   }
 
-  async function generateLanding() {
-    if (!product) return;
+  async function generateLandingFromProduct(currentProduct) {
+    if (!currentProduct) return;
     setLandingStatus("loading");
     setPublication(null);
     setPublishMessage("");
@@ -133,7 +148,7 @@ export default function App() {
       const generateResponse = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product })
+        body: JSON.stringify({ product: currentProduct })
       });
       const generated = await generateResponse.json();
       if (!generateResponse.ok) throw new Error(generated.error || "Не удалось сгенерировать лендинг.");
@@ -144,6 +159,10 @@ export default function App() {
       setPublishMessage(error.message);
       setLandingStatus("error");
     }
+  }
+
+  async function generateLanding() {
+    await generateLandingFromProduct(product);
   }
 
   async function publishToDemoUcoz() {
@@ -189,6 +208,14 @@ export default function App() {
 
   const isBusy = status === "loading";
   const isLandingBusy = landingStatus === "loading" || landingStatus === "publishing";
+  const detectedMarketplace = detectMarketplaceFromUrl(productUrl);
+  const activeMarketplace = resolveMarketplace(productUrl, marketplaceMode);
+  const marketplaceBadge = getMarketplaceMeta(activeMarketplace || (marketplaceMode === "auto" ? detectedMarketplace : marketplaceMode));
+  const marketplaceHint = marketplaceMode === "auto"
+    ? detectedMarketplace
+      ? `Автоопределение: ${getMarketplaceMeta(detectedMarketplace).fullLabel}`
+      : "Автоопределение: вставьте ссылку WB или Avito"
+    : `Выбрано: ${getMarketplaceMeta(marketplaceMode).fullLabel}`;
 
   return (
     <main id="top" className={`ucoz-app theme-${theme} relative min-h-screen overflow-hidden pb-48 text-slate-950 sm:pb-40 ${product || isBusy ? "product-active" : ""}`}>
@@ -212,11 +239,11 @@ export default function App() {
             Получите персональный лендинг за <span className="sunny-gradient-text">1 минуту</span>
           </h1>
           <p className="font-display mx-auto mt-6 max-w-2xl text-base leading-7 text-slate-600 sm:text-lg">
-            Всего два шага: вы даёте нам карточку Wildberries, а мы возвращаем готовый адаптивный лендинг с сильным CTA.
+            Всего два шага: вы даёте нам карточку товара с Wildberries или Avito, а мы возвращаем готовый адаптивный лендинг с сильным CTA.
           </p>
 
           <div className="mx-auto mt-9 grid max-w-3xl gap-3 text-left sm:grid-cols-[1fr_auto_1fr] sm:items-center">
-            <ProcessStep number="1" icon={Link2} title="Вы нам карточку" description="Вставьте публичную ссылку на товар WB." />
+            <ProcessStep number="1" icon={Link2} title="Вы нам карточку" description="Вставьте публичную ссылку на товар WB или Avito." />
             <ArrowRight className="mx-auto hidden text-violet-400 sm:block" size={22} />
             <ProcessStep number="2" icon={WandSparkles} title="Мы вам лендинг" description="AI соберёт страницу и отправит её на uCoz." />
           </div>
@@ -251,9 +278,27 @@ export default function App() {
 
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[65] p-3 sm:p-4">
         <section className="bottom-composer pointer-events-auto mx-auto max-w-6xl rounded-[27px] bg-white/72 p-2 shadow-[0_20px_70px_rgba(72,45,118,.19)] backdrop-blur-2xl sm:p-2.5">
+          <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+            {[
+              { key: "auto", label: "Авто" },
+              { key: "wb", label: "WB" },
+              { key: "avito", label: "Avito" }
+            ].map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setMarketplaceMode(option.key)}
+                className={`inline-flex min-h-8 items-center rounded-2xl px-3 text-[11px] font-extrabold transition focus:outline-hidden focus:ring-2 focus:ring-violet-100 ${marketplaceMode === option.key ? "bg-slate-950 text-white" : "bg-white/72 text-slate-600 hover:bg-white"}`}
+                aria-pressed={marketplaceMode === option.key}
+              >
+                {option.label}
+              </button>
+            ))}
+            <span className="text-[11px] font-semibold text-slate-500 sm:ms-2">{marketplaceHint}</span>
+          </div>
           <form onSubmit={inspectProduct} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
             <div className="relative min-w-0">
-              <label htmlFor="product-url" className="sr-only">Ссылка на карточку товара Wildberries</label>
+              <label htmlFor="product-url" className="sr-only">Ссылка на карточку товара маркетплейса</label>
               <input
                 id="product-url"
                 value={productUrl}
@@ -262,10 +307,10 @@ export default function App() {
                 type="url"
                 inputMode="url"
                 autoComplete="url"
-                placeholder="Вставьте ссылку Wildberries…"
+                placeholder="Вставьте ссылку Wildberries или Avito…"
                 className="block min-h-11 w-full rounded-[19px] bg-white/68 py-2.5 ps-4 pe-14 text-sm font-semibold text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,.9)] outline-none transition placeholder:text-slate-400 focus:ring-4 focus:ring-violet-100"
               />
-              <span className="wb-pulse absolute end-1.5 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded-[15px] bg-gradient-to-br from-fuchsia-500 via-violet-600 to-indigo-600 text-[11px] font-black lowercase text-white shadow-[0_8px_22px_rgba(124,58,237,.25)]" aria-label="Wildberries">wb</span>
+              <span className={`marketplace-badge absolute end-1.5 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded-[15px] bg-gradient-to-br text-[11px] font-black lowercase text-white shadow-[0_8px_22px_rgba(124,58,237,.25)] ${marketplaceBadge.badgeClassName}`} aria-label={marketplaceBadge.fullLabel}>{marketplaceBadge.shortLabel}</span>
             </div>
 
             <div className="dock-action-group flex flex-wrap items-center gap-1 p-1">

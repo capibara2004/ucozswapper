@@ -1,3 +1,5 @@
+import { upgradeProductImageUrl } from "../lib/imageQuality.js";
+
 const presets = new Set(["spotlight", "editorial", "spec-driven", "red_dark", "green_dark", "toxic", "midnight"]);
 const accents = new Set(["violet", "electric-blue", "emerald", "coral"]);
 const heroLayouts = new Set(["media-left", "media-right"]);
@@ -81,7 +83,7 @@ function structuredProduct(product, content, productUrl) {
     "@type": "Product",
     name: product.title,
     description: product.description || content.hero.subheadline,
-    image: (product.images || []).map((image) => safeHttpUrl(image, "")).filter(Boolean),
+    image: (product.images || []).map((image) => safeHttpUrl(upgradeProductImageUrl(image, product.platform), "")).filter(Boolean),
     sku: product.productId
   };
   if (numericPrice && Number.isFinite(Number(numericPrice))) {
@@ -97,7 +99,8 @@ function structuredProduct(product, content, productUrl) {
 
 export function renderLandingHtml(product, content) {
   const design = resolveLandingDesign(product, content);
-  const imageUrl = safeHttpUrl(content.hero.image || product.images[0] || "", "");
+  const images = (product.images || []).map((image) => upgradeProductImageUrl(image, product.platform));
+  const imageUrl = safeHttpUrl(upgradeProductImageUrl(content.hero.image || images[0] || "", product.platform), "");
   const productUrl = safeHttpUrl(content.cta.url, safeHttpUrl(product.productUrl));
   const price = product.priceWithoutWallet || product.price || "Цена уточняется";
   const imageAlt = `${product.title} — фото товара`;
@@ -113,7 +116,7 @@ export function renderLandingHtml(product, content) {
   const description = descriptionParagraphs(product.description || content.hero.subheadline)
     .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
     .join("");
-  const gallery = product.images
+  const gallery = images
     .slice(0, 8)
     .map((image, index) => `<figure class="gallery-card"><img src="${escapeHtml(safeHttpUrl(image))}" alt="${escapeHtml(product.title)} — фото ${index + 1}" loading="lazy"><figcaption>${String(index + 1).padStart(2, "0")}</figcaption></figure>`)
     .join("");
