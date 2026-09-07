@@ -7,8 +7,10 @@ import dotenv from "dotenv";
 import { z } from "zod";
 import * as cheerio from "cheerio";
 import { fetchAvitoProductViaZenRows } from "./adapters/avito.js";
+import { fetchAvitoProductViaScrapfly } from "./adapters/scrapfly.js";
 import { upgradeWbImageUrl } from "./lib/imageQuality.js";
-import { createRandomLandingDesign, generateLandingWithNexus, getLlmRuntimeInfo, landingContentSchema } from "./handlers/llmhandler.js";
+import { aiHtmlDocumentSchema, generateAiHtmlWithNexus } from "./handlers/aihtmlhandler.js";
+import { createRandomLandingDesign, generateLandingWithNexus, getLlmRuntimeInfo, landingContentSchema, listNexusModels } from "./handlers/llmhandler.js";
 import { renderLandingHtml } from "./handlers/landingrenderer.js";
 import { publishLandingToUcoz, publishLandingWithUserUapi } from "./handlers/ucozpublisher.js";
 
@@ -17,15 +19,39 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, "../.env") });
 const clientDist = path.join(__dirname, "../../client/dist");
 
-const app = Fastify({ logger: true, trustProxy: true });
+const appMountPrefixes = ["/apps/ucozswapper", "/ucozswapper"];
+
+function rewriteMountedUrl(rawRequest) {
+  const requestUrl = rawRequest.url || "/";
+  const requestPath = requestUrl.split("?", 1)[0];
+
+  for (const prefix of appMountPrefixes) {
+    if (requestPath === prefix) {
+      return `/__ucoz_mount_redirect?mount=${encodeURIComponent(prefix)}`;
+    }
+    if (requestPath.startsWith(`${prefix}/`)) {
+      return requestUrl.slice(prefix.length) || "/";
+    }
+  }
+
+  return requestUrl;
+}
+
+const app = Fastify({ logger: true, trustProxy: true, rewriteUrl: rewriteMountedUrl });
 const productCache = new Map();
 const productCacheTtlMs = 15 * 60 * 1000;
 const supportedMarketplaceSchema = z.enum(["wb", "avito"]);
+const landingGenerationModeSchema = z.enum(["template", "ai-html"]);
 
-await app.register(cors, { origin: true });
-await app.register(fastifyStatic, {
+app.register(cors, { origin: true });
+app.register(fastifyStatic, {
   root: clientDist,
   prefix: "/"
+});
+
+app.get("/__ucoz_mount_redirect", async (request, reply) => {
+  const mount = appMountPrefixes.includes(request.query?.mount) ? request.query.mount : "/ucozswapper";
+  return reply.redirect(`${mount}/`);
 });
 
 const productInputSchema = z.object({
@@ -52,16 +78,26 @@ const productDtoSchema = z.object({
 const generateInputSchema = z.object({
   product: productDtoSchema.optional(),
   productUrl: z.string().trim().url().max(2000).optional(),
-  marketplace: supportedMarketplaceSchema.default("wb")
+  marketplace: supportedMarketplaceSchema.default("wb"),
+  model: z.string().trim().min(1).max(120).regex(/^[A-Za-z0-9._:/-]+$/, "Некорректное имя модели.").optional(),
+  generationMode: landingGenerationModeSchema.default("template")
 }).refine((value) => value.product || value.productUrl, { message: "Нужен product или productUrl." });
 
 const publishInputSchema = z.object({
   content: landingContentSchema,
-  product: productDtoSchema
+  product: productDtoSchema,
+  generationMode: landingGenerationModeSchema.default("template"),
+  html: aiHtmlDocumentSchema.shape.html.optional()
 });
 
+function normalizeHttpUrl(value) {
+  const text = String(value || "").trim();
+  if (!text || /^https?:\/\//i.test(text)) return text;
+  return `https://${text}`;
+}
+
 const userUapiPublishInputSchema = publishInputSchema.extend({
-  siteUrl: z.string().trim().url().max(500),
+  siteUrl: z.preprocess(normalizeHttpUrl, z.string().trim().url().max(500)),
   apiKey: z.string().trim().min(24).max(256).regex(/^sk_live_[A-Za-z0-9_-]+$/, "Некорректный формат uAPI key.")
 });
 
@@ -93,6 +129,34 @@ function assertSupportedProductUrl(productUrl, marketplace) {
   if (marketplace === "ozon" && hostname !== "ozon.ru" && !hostname.endsWith(".ozon.ru")) {
     throw new Error("Для режима Ozon нужна ссылка с домена ozon.ru.");
   }
+}
+
+function normalizeProductMarketplace(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (text === "wb" || text.includes("wildberries")) return "wb";
+  if (text === "avito") return "avito";
+  return null;
+}
+
+function detectMarketplaceFromProductUrl(productUrl) {
+  const hostname = new URL(productUrl).hostname.toLowerCase();
+  if (hostname === "wildberries.ru" || hostname.endsWith(".wildberries.ru")) return "wb";
+  if (hostname === "avito.ru" || hostname.endsWith(".avito.ru")) return "avito";
+  return null;
+}
+
+function assertProductMarketplace(product) {
+  const declaredMarketplace = normalizeProductMarketplace(product?.platform || product?.marketplace);
+  const sourceMarketplace = detectMarketplaceFromProductUrl(product?.productUrl);
+
+  if (!declaredMarketplace || !sourceMarketplace) {
+    throw new Error("Не удалось подтвердить маркетплейс карточки.");
+  }
+  if (declaredMarketplace !== sourceMarketplace) {
+    throw new Error("Маркетплейс Product DTO не соответствует домену исходной карточки.");
+  }
+  assertSupportedProductUrl(product.productUrl, declaredMarketplace);
+  return declaredMarketplace;
 }
 
 function extractProductId(productUrl) {
@@ -543,22 +607,29 @@ async function parseProduct(productUrl, requestedMarketplace) {
   }
   if (cached) productCache.delete(cacheKey);
 
+  const avitoScraper = String(process.env.AVITO_SCRAPER || "scrapfly").trim().toLowerCase();
   const fetchers = {
     wb: fetchWbProductViaZenRows,
-    avito: fetchAvitoProductViaZenRows
+    avito: avitoScraper === "zenrows" ? fetchAvitoProductViaZenRows : fetchAvitoProductViaScrapfly
   };
   const fetchProduct = fetchers[marketplace];
 
   if (fetchProduct) {
     try {
-      if (!process.env.ZENROWS_API_KEY) throw new Error("ZENROWS_API_KEY не настроен на backend.");
+      const scraperName = marketplace === "avito" && avitoScraper !== "zenrows" ? "Scrapfly" : "ZenRows";
+      if (scraperName === "Scrapfly" && !process.env.SCRAPFLY_API_KEY) {
+        throw new Error("SCRAPFLY_API_KEY не настроен на backend.");
+      }
+      if (scraperName === "ZenRows" && !process.env.ZENROWS_API_KEY) {
+        throw new Error("ZENROWS_API_KEY не настроен на backend.");
+      }
       let product = await fetchProduct(productUrl);
       const productNeedsRetry = !product.title
         || isFallbackProductTitle(product.title)
         || (!product.price && marketplace === "wb")
         || (!product.description && marketplace === "wb")
         || !product.images.length;
-      if (productNeedsRetry && process.env.ZENROWS_EMPTY_RETRY !== "false") {
+      if (productNeedsRetry && marketplace !== "avito" && process.env.ZENROWS_EMPTY_RETRY !== "false") {
         const retriedProduct = await fetchProduct(productUrl);
         if (productQualityScore(retriedProduct) >= productQualityScore(product)) product = retriedProduct;
       }
@@ -568,7 +639,8 @@ async function parseProduct(productUrl, requestedMarketplace) {
       if (process.env.DEMO_FALLBACK === "true") {
         const fallback = createMockProduct(productUrl, marketplace);
         fallback.sourceStatus = "fallback";
-        fallback.warnings = [`ZenRows не получил карточку: ${error.message}`, ...fallback.warnings];
+        const scraperName = marketplace === "avito" && avitoScraper !== "zenrows" ? "Scrapfly" : "ZenRows";
+        fallback.warnings = [`${scraperName} не получил карточку: ${error.message}`, ...fallback.warnings];
         return fallback;
       }
       throw error;
@@ -621,7 +693,7 @@ function buildMockLanding(product) {
 app.get("/api/health", async () => ({
   ok: true,
   service: "ucoz-market-page-ai",
-  mode: "zenrows-only",
+  mode: "scrapfly-avito-zenrows-wb",
   llm: getLlmRuntimeInfo(),
   ucoz: {
     configured: Boolean(process.env.UCOZ_API_TOKEN && process.env.UCOZ_SITE_URL),
@@ -629,6 +701,11 @@ app.get("/api/health", async () => ({
   },
   timestamp: new Date().toISOString()
 }));
+
+app.get("/api/models", async (_request, reply) => {
+  reply.header("Cache-Control", "no-store");
+  return listNexusModels();
+});
 
 app.post("/api/parse", async (request, reply) => {
   const parsed = productInputSchema.safeParse(request.body);
@@ -648,21 +725,36 @@ app.post("/api/generate", async (request, reply) => {
     return reply.code(400).send({ error: "Передайте проверенную карточку товара." });
   }
   let product;
-  try {
-    product = parsed.data.product || await parseProduct(parsed.data.productUrl, parsed.data.marketplace);
-  } catch (error) {
-    return reply.code(502).send({ error: error.message || "Не удалось получить карточку товара." });
+  if (parsed.data.product) {
+    product = parsed.data.product;
+    try {
+      assertProductMarketplace(product);
+    } catch (error) {
+      return reply.code(400).send({ error: error.message });
+    }
+  } else {
+    try {
+      product = await parseProduct(parsed.data.productUrl, parsed.data.marketplace);
+      assertProductMarketplace(product);
+    } catch (error) {
+      return reply.code(502).send({ error: error.message || "Не удалось получить карточку товара." });
+    }
   }
   try {
-    const generated = await generateLandingWithNexus(product);
+    const generated = await generateLandingWithNexus(product, parsed.data.model);
+    const aiHtml = parsed.data.generationMode === "ai-html"
+      ? await generateAiHtmlWithNexus(product, generated.content, parsed.data.model || generated.model)
+      : null;
     return {
       product,
       content: generated.content,
-      html: renderLandingHtml(product, generated.content),
+      html: aiHtml?.html || renderLandingHtml(product, generated.content),
+      generationMode: parsed.data.generationMode,
       mode: generated.mode,
       provider: generated.provider,
-      model: generated.model,
+      model: aiHtml?.model || generated.model,
       requestId: generated.requestId,
+      htmlRequestId: aiHtml?.requestId || null,
       warnings: [...new Set([...(product.warnings || []), ...(generated.warnings || [])])]
     };
   } catch (error) {
@@ -672,6 +764,7 @@ app.post("/api/generate", async (request, reply) => {
         product,
         content,
         html: renderLandingHtml(product, content),
+        generationMode: "template",
         mode: "mock",
         warnings: [...new Set([...(product.warnings || []), `AI недоступен: ${error.message}`, "Резервный mock-контент использован для демо."])]
       };
@@ -685,7 +778,17 @@ app.post("/api/publish", async (request, reply) => {
   if (!parsed.success) {
     return reply.code(400).send({ error: "Некорректные данные для публикации." });
   }
-  const html = renderLandingHtml(parsed.data.product, parsed.data.content);
+  try {
+    assertProductMarketplace(parsed.data.product);
+  } catch (error) {
+    return reply.code(400).send({ error: error.message });
+  }
+  if (parsed.data.generationMode === "ai-html" && !parsed.data.html) {
+    return reply.code(400).send({ error: "Для режима AI HTML передайте сгенерированный HTML из preview." });
+  }
+  const html = parsed.data.generationMode === "ai-html"
+    ? parsed.data.html
+    : renderLandingHtml(parsed.data.product, parsed.data.content);
   try {
     const publication = await publishLandingToUcoz({
       product: parsed.data.product,
@@ -714,8 +817,18 @@ app.post("/api/publish/uapi", async (request, reply) => {
   if (!parsed.success) {
     return reply.code(400).send({ error: parsed.error.issues[0]?.message || "Некорректные данные uAPI-публикации." });
   }
-  const { product, content, siteUrl, apiKey } = parsed.data;
-  const html = renderLandingHtml(product, content);
+  const { product, content, siteUrl, apiKey, generationMode } = parsed.data;
+  try {
+    assertProductMarketplace(product);
+  } catch (error) {
+    return reply.code(400).send({ error: error.message });
+  }
+  if (generationMode === "ai-html" && !parsed.data.html) {
+    return reply.code(400).send({ error: "Для режима AI HTML передайте сгенерированный HTML из preview." });
+  }
+  const html = generationMode === "ai-html"
+    ? parsed.data.html
+    : renderLandingHtml(product, content);
   try {
     const publication = await publishLandingWithUserUapi({ product, content, html, siteUrl, apiKey });
     return {
@@ -739,4 +852,7 @@ app.setNotFoundHandler((request, reply) => {
 });
 
 const port = Number(process.env.PORT || 3001);
-await app.listen({ port, host: "0.0.0.0" });
+app.listen({ port, host: "0.0.0.0" }).catch((error) => {
+  app.log.error(error);
+  process.exitCode = 1;
+});

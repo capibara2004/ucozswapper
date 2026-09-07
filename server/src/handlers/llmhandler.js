@@ -1,26 +1,54 @@
 import { randomInt } from "node:crypto";
 import { z } from "zod";
 
-const landingPresets = ["spotlight", "editorial", "spec-driven", "red_dark", "green_dark", "toxic", "midnight"];
+const landingPresets = [
+  "spotlight",
+  "editorial",
+  "spec-driven",
+  "red_dark",
+  "green_dark",
+  "toxic",
+  "midnight",
+  "mindflower",
+  "grapeleaf",
+  "greentree",
+  "colorspace",
+  "graymoon"
+];
 const landingAccents = ["violet", "electric-blue", "emerald", "coral"];
 const landingHeroLayouts = ["media-left", "media-right"];
 const landingSliders = ["rail", "cards", "cinematic"];
+const defaultNexusModel = "gemini-3.8-flash";
+
+function getNexusConfig() {
+  return {
+    apiKey: process.env.NEXUS_API_KEY,
+    baseUrl: (process.env.NEXUS_API_BASE_URL || "https://api.nexus-hub.tech/v1").replace(/\/$/, ""),
+    defaultModel: process.env.NEXUS_MODEL || defaultNexusModel
+  };
+}
 
 function randomItem(values) {
   return values[randomInt(values.length)];
 }
 
 export function createRandomLandingDesign() {
-  const preset = randomItem(landingPresets);
-  const darkPresetAccents = {
+  const requestedPreset = String(process.env.LANDING_TEMPLATE_MODE || "").trim();
+  const preset = landingPresets.includes(requestedPreset) ? requestedPreset : randomItem(landingPresets);
+  const presetAccents = {
     red_dark: "coral",
     green_dark: "emerald",
     toxic: "emerald",
-    midnight: "electric-blue"
+    midnight: "electric-blue",
+    mindflower: "violet",
+    grapeleaf: "violet",
+    greentree: "emerald",
+    colorspace: "electric-blue",
+    graymoon: "electric-blue"
   };
   return {
     preset,
-    accent: darkPresetAccents[preset] || randomItem(landingAccents),
+    accent: presetAccents[preset] || randomItem(landingAccents),
     heroLayout: randomItem(landingHeroLayouts),
     slider: randomItem(landingSliders)
   };
@@ -28,7 +56,20 @@ export function createRandomLandingDesign() {
 
 export const landingContentSchema = z.object({
   design: z.object({
-    preset: z.enum(["spotlight", "editorial", "spec-driven", "red_dark", "green_dark", "toxic", "midnight"]),
+    preset: z.enum([
+      "spotlight",
+      "editorial",
+      "spec-driven",
+      "red_dark",
+      "green_dark",
+      "toxic",
+      "midnight",
+      "mindflower",
+      "grapeleaf",
+      "greentree",
+      "colorspace",
+      "graymoon"
+    ]),
     accent: z.enum(["violet", "electric-blue", "emerald", "coral"]),
     heroLayout: z.enum(["media-left", "media-right"]),
     slider: z.enum(["rail", "cards", "cinematic"])
@@ -161,45 +202,101 @@ function extractChatText(payload) {
 }
 
 export function getLlmRuntimeInfo() {
+  const { apiKey, defaultModel } = getNexusConfig();
   return {
-    configured: Boolean(process.env.NEXUS_API_KEY),
+    configured: Boolean(apiKey),
     provider: "Nexus Hub",
-    model: process.env.NEXUS_MODEL || "gemini-3.8-flash",
+    model: defaultModel,
     protocol: "chat/completions"
   };
 }
 
-export async function generateLandingWithNexus(product) {
-  const apiKey = process.env.NEXUS_API_KEY;
+export async function listNexusModels() {
+  const { apiKey, baseUrl, defaultModel } = getNexusConfig();
+  if (!apiKey) {
+    return {
+      defaultModel,
+      models: [defaultModel],
+      source: "fallback",
+      warning: "NEXUS_API_KEY не настроен на backend."
+    };
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(12_000)
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${body.replace(/\s+/g, " ").slice(0, 180)}`);
+    }
+
+    const payload = JSON.parse(body);
+    const entries = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.models)
+        ? payload.models
+        : Array.isArray(payload)
+          ? payload
+          : [];
+    const discovered = entries
+      .map((entry) => typeof entry === "string" ? entry : entry?.id || entry?.name || entry?.model)
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const models = [...new Set([defaultModel, ...discovered])];
+    if (models.length === 1 && discovered.length === 0) throw new Error("шлюз вернул пустой список моделей");
+
+    return { defaultModel, models, source: "nexus" };
+  } catch (error) {
+    return {
+      defaultModel,
+      models: [defaultModel],
+      source: "fallback",
+      warning: `Не удалось получить список моделей Nexus: ${error.message}`
+    };
+  }
+}
+
+export async function generateLandingWithNexus(product, requestedModel) {
+  const { apiKey, baseUrl, defaultModel } = getNexusConfig();
   if (!apiKey) throw new Error("NEXUS_API_KEY не настроен на backend.");
 
-  const baseUrl = (process.env.NEXUS_API_BASE_URL || "https://api.nexus-hub.tech/v1").replace(/\/$/, "");
-  const model = process.env.NEXUS_MODEL || "gemini-3.8-flash";
+  const model = String(requestedModel || defaultModel).trim();
+  const supportsStructuredOutput = !model.toLowerCase().includes("deepseek");
+  const userPrompt = supportsStructuredOutput
+    ? buildLandingPrompt(product)
+    : `${buildLandingPrompt(product)}\njson_schema=${JSON.stringify(landingJsonSchema)}`;
+  const requestPayload = {
+    model,
+    messages: [
+      {
+        role: "system",
+        content: "Ты senior CRO-копирайтер и SEO-архитектор товарных лендингов. Создавай убедительную, кликабельную, но строго достоверную структуру только из ProductDTO. Не придумывай факты. Отвечай исключительно валидным JSON по переданной строгой схеме. Не используй Markdown и блоки кода."
+      },
+      { role: "user", content: userPrompt }
+    ],
+    max_tokens: supportsStructuredOutput ? 4096 : 8192
+  };
+
+  if (supportsStructuredOutput) {
+    requestPayload.response_format = {
+      type: "json_schema",
+      json_schema: {
+        name: "landing_content",
+        strict: true,
+        schema: landingJsonSchema
+      }
+    };
+  }
+
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "system",
-          content: "Ты senior CRO-копирайтер и SEO-архитектор товарных лендингов. Создавай убедительную, кликабельную, но строго достоверную структуру только из ProductDTO. Не придумывай факты. Отвечай исключительно валидным JSON по переданной строгой схеме."
-        },
-        { role: "user", content: buildLandingPrompt(product) }
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "landing_content",
-          strict: true,
-          schema: landingJsonSchema
-        }
-      },
-      max_tokens: 4096
-    }),
+    body: JSON.stringify(requestPayload),
     signal: AbortSignal.timeout(90_000)
   });
 
@@ -227,9 +324,13 @@ export async function generateLandingWithNexus(product) {
 
   let rawContent;
   try {
-    rawContent = JSON.parse(modelText);
+    const normalizedModelText = modelText
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+    rawContent = JSON.parse(normalizedModelText);
   } catch {
-    throw new Error("Gemini не вернул JSON-контент лендинга.");
+    throw new Error(`${model} не вернул валидный JSON-контент лендинга.`);
   }
 
   if (rawContent?.hero) {
@@ -244,7 +345,7 @@ export async function generateLandingWithNexus(product) {
   const validated = modelLandingContentSchema.safeParse(rawContent);
   if (!validated.success) {
     const issue = validated.error.issues[0];
-    throw new Error(`Ответ Gemini не прошёл схему LandingContent: ${issue?.path?.join(".") || "root"} — ${issue?.message || "validation error"}`);
+    throw new Error(`Ответ ${model} не прошёл схему LandingContent: ${issue?.path?.join(".") || "root"} — ${issue?.message || "validation error"}`);
   }
 
   const content = landingContentSchema.parse({

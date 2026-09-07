@@ -1,33 +1,42 @@
 import { useState } from "react";
-import { ExternalLink, History, ShoppingBag, X } from "lucide-react";
+import { ExternalLink, History, Moon, Sun, X } from "lucide-react";
 import { getMarketplaceLinkLabel, upgradeDisplayImageUrl } from "../lib/marketplace";
 
 function compactId(value) {
   return value.length > 14 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
 }
 
-export default function LocalAccount({ account }) {
+export default function LocalAccount({ account, theme, onToggleTheme }) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
     <>
-      <button
-        type="button"
-        className="history-fab group fixed bottom-5 end-5 z-[70] grid size-16 place-items-center rounded-[22px] border border-white/85 bg-white/62 text-slate-900 shadow-[0_18px_50px_rgba(76,29,149,.2)] backdrop-blur-2xl transition hover:-translate-y-1 hover:bg-white/80 focus:outline-hidden focus:ring-4 focus:ring-violet-200 sm:bottom-7 sm:end-7 sm:size-[72px]"
-        aria-haspopup="dialog"
-        aria-expanded={isOpen}
-        aria-controls="history-drawer"
-        aria-label="Открыть историю лендингов"
-        onClick={() => setIsOpen(true)}
-      >
-        <ShoppingBag size={25} strokeWidth={2.1} className="transition group-hover:scale-105 group-hover:text-violet-700" />
-        <span className="absolute -end-1 -top-1 grid min-h-6 min-w-6 place-items-center rounded-full border-2 border-white bg-violet-600 px-1.5 text-[10px] font-black text-white shadow-md">
-          {account.publications.length}
-        </span>
-        <span className="pointer-events-none absolute end-[calc(100%+10px)] hidden whitespace-nowrap rounded-xl border border-white/80 bg-white/75 px-3 py-2 text-xs font-bold text-slate-700 opacity-0 shadow-lg backdrop-blur-xl transition group-hover:opacity-100 sm:block">
-          История лендингов
-        </span>
-      </button>
+      <div className="utility-toggle-group" role="group" aria-label="Настройки и история">
+        <button
+          type="button"
+          onClick={onToggleTheme}
+          className="theme-toggle utility-toggle-button"
+          aria-label={theme === "dark" ? "Включить светлую тему" : "Включить тёмную тему"}
+          title={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+        >
+          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
+        <button
+          type="button"
+          className="history-fab utility-toggle-button group"
+          aria-haspopup="dialog"
+          aria-expanded={isOpen}
+          aria-controls="history-drawer"
+          aria-label="Открыть историю лендингов"
+          title="История лендингов"
+          onClick={() => setIsOpen(true)}
+        >
+          <History size={17} strokeWidth={2.1} className="transition group-hover:scale-105 group-hover:text-violet-700" />
+          <span className="history-count-badge">
+            {account.publications.length}
+          </span>
+        </button>
+      </div>
 
       {isOpen && <aside
         id="history-drawer"
@@ -57,7 +66,7 @@ export default function LocalAccount({ account }) {
             {account.publications.length === 0 ? (
               <div className="grid min-h-64 place-items-center rounded-[26px] border border-dashed border-violet-200 bg-violet-50/35 p-7 text-center">
                 <div>
-                  <span className="mx-auto grid size-14 place-items-center rounded-[20px] bg-white text-violet-600 shadow-sm"><ShoppingBag size={23} /></span>
+                  <span className="mx-auto grid size-14 place-items-center rounded-[20px] bg-white text-violet-600 shadow-sm"><History size={23} /></span>
                   <p className="mt-4 font-extrabold text-slate-900">История пока пустая</p>
                   <p className="mt-2 text-sm leading-6 text-slate-500">Здесь появятся карточки всех успешно опубликованных лендингов.</p>
                 </div>

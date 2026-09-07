@@ -75,7 +75,7 @@ export default function ProductCardPreview({ product }) {
       </div>
 
       <div className="zenrows-card-footer">
-        <span>Источник: {product.sourceMode === "zenrows" ? "ZenRows" : product.sourceMode}</span>
+        <span>Источник: {product.sourceMode === "zenrows" ? "ZenRows" : product.sourceMode === "scrapfly" ? "Scrapfly" : product.sourceMode}</span>
         <span>Получено: {new Date(product.fetchedAt).toLocaleString("ru-RU")}</span>
       </div>
     </article>

@@ -96,6 +96,30 @@ export function validateMarketplaceSelection(productUrl, marketplaceMode = "auto
   return null;
 }
 
+export function validateProductMarketplace(product, currentUrl, marketplaceMode = "auto") {
+  if (!product) return "Сначала получите карточку товара.";
+
+  const productMarketplace = normalizeMarketplace(product.platform || product.marketplace);
+  const sourceMarketplace = detectMarketplaceFromUrl(product.productUrl);
+  const currentMarketplace = detectMarketplaceFromUrl(currentUrl || product.productUrl);
+  const selectedMarketplace = normalizeMarketplace(marketplaceMode);
+
+  if (!productMarketplace || !sourceMarketplace) {
+    return "Не удалось подтвердить маркетплейс полученной карточки.";
+  }
+  if (productMarketplace !== sourceMarketplace) {
+    return `Карточка помечена как ${getMarketplaceMeta(productMarketplace).fullLabel}, но её источник ведёт на ${getMarketplaceMeta(sourceMarketplace).fullLabel}.`;
+  }
+  if (currentMarketplace && currentMarketplace !== productMarketplace) {
+    return `Сейчас открыта карточка ${getMarketplaceMeta(productMarketplace).fullLabel}, а введённая ссылка ведёт на ${getMarketplaceMeta(currentMarketplace).fullLabel}. Получите новую карточку.`;
+  }
+  if (selectedMarketplace && selectedMarketplace !== productMarketplace) {
+    return `Нельзя использовать карточку ${getMarketplaceMeta(productMarketplace).fullLabel} в режиме ${getMarketplaceMeta(selectedMarketplace).fullLabel}.`;
+  }
+
+  return null;
+}
+
 export function getPriceLabel(product) {
   return getMarketplaceMeta(product?.platform || product?.marketplace).priceLabel;
 }

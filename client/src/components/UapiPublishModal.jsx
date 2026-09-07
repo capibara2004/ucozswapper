@@ -1,6 +1,12 @@
 import { ExternalLink, KeyRound, Send, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 
+function normalizeSiteUrl(value) {
+  const text = String(value || "").trim();
+  if (!text || /^https?:\/\//i.test(text)) return text;
+  return `https://${text}`;
+}
+
 export default function UapiPublishModal({ onClose, onPublish }) {
   const [siteUrl, setSiteUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -12,7 +18,11 @@ export default function UapiPublishModal({ onClose, onPublish }) {
     setStatus("loading");
     setMessage("");
     try {
-      await onPublish({ siteUrl, apiKey });
+      const normalizedSiteUrl = normalizeSiteUrl(siteUrl);
+      const parsedUrl = new URL(normalizedSiteUrl);
+      if (!/^https?:$/.test(parsedUrl.protocol) || !parsedUrl.hostname) throw new Error("Введите корректный адрес сайта uCoz.");
+      setSiteUrl(normalizedSiteUrl);
+      await onPublish({ siteUrl: normalizedSiteUrl, apiKey });
       setApiKey("");
       setStatus("success");
       setMessage("Страница создана. Её можно открыть и редактировать в панели uCoz.");
@@ -36,7 +46,7 @@ export default function UapiPublishModal({ onClose, onPublish }) {
         <form onSubmit={submit} className="uapi-modal-form">
           <label>
             <span>Адрес сайта uCoz</span>
-            <input type="url" required value={siteUrl} onChange={(event) => setSiteUrl(event.target.value)} placeholder="https://example.ucoz.net" autoComplete="url" />
+            <input type="text" inputMode="url" required value={siteUrl} onChange={(event) => setSiteUrl(event.target.value)} onBlur={() => setSiteUrl((current) => normalizeSiteUrl(current))} placeholder="example.ucoz.net" autoComplete="url" />
           </label>
           <label>
             <span>uAPI key</span>

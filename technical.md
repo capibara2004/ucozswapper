@@ -1,5 +1,7 @@
 # UcozSwapper — технический запуск
 
+Production-развёртывание в uCoz Server Scripts описано в `DEPLOY-UCOZ.md`.
+
 ## Требования
 
 - Git 2.x.
@@ -30,6 +32,7 @@ DEMO_FALLBACK=true
 
 ZENROWS_API_KEY=
 ZENROWS_CAPTURE_XHR=false
+ZENROWS_EMPTY_RETRY=true
 
 NEXUS_API_KEY=
 NEXUS_API_BASE_URL=https://api.nexus-hub.tech/v1
@@ -43,6 +46,8 @@ UCOZ_FTP_HOST=
 UCOZ_FTP_USER=
 UCOZ_FTP_PASS=
 ```
+
+`WB_API_TOKEN`, `OZON_CLIENT_ID` и `OZON_API_KEY` приложением не используются: обе поддерживаемые площадки (WB и Avito) сейчас разбираются через ZenRows.
 
 Ключ пользователя для `POST /api/publish/uapi` в `.env` не нужен: UI отправляет его один раз в body, сервер использует его для одного Pages-запроса и не сохраняет.
 

@@ -2,6 +2,11 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      const appBasePath = window.location.pathname.replace(/\/+$/, "") || "/";
+      const normalizedAppBase = appBasePath === "/" ? "/" : `${appBasePath}/`;
+      document.write(`<base href="${normalizedAppBase}">`);
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#fbf9ff" />
     <meta name="description" content="UcozSwapper превращает карточку Wildberries или Avito в готовый AI-лендинг на uCoz." />

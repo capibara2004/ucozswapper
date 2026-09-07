@@ -8,6 +8,7 @@
     "dev:client": "npm --prefix client run dev",
     "dev:server": "npm --prefix server run dev",
     "build": "npm --prefix client run build",
+    "deploy:ucoz": "npm run build && node scripts/prepare-ucoz-deploy.mjs",
     "start": "npm --prefix server run start"
   },
   "devDependencies": {

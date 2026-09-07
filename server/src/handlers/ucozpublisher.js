@@ -1,11 +1,16 @@
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ucozServerEntry = path.join(__dirname, "../../node_modules/ucoz-mcp/dist/index.js");
+const ucozServerCandidates = [
+  path.join(__dirname, "../../node_modules/ucoz-mcp/dist/index.js"),
+  path.join(__dirname, "../../../node_modules/ucoz-mcp/dist/index.js")
+];
+const ucozServerEntry = ucozServerCandidates.find((candidate) => existsSync(candidate)) || ucozServerCandidates[0];
 
 function requireUcozConfig(required) {
   const missing = required.filter((name) => !process.env[name]);

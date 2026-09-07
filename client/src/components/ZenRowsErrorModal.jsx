@@ -1,6 +1,6 @@
 import "./zenrows.css";
 
-export default function ZenRowsErrorModal({ errors = [], warnings = [], onClose }) {
+export default function ZenRowsErrorModal({ provider = "Parsing", errors = [], warnings = [], onClose }) {
   if (!errors.length && !warnings.length) return null;
 
   return (
@@ -8,7 +8,7 @@ export default function ZenRowsErrorModal({ errors = [], warnings = [], onClose 
       <section className="zenrows-modal" role="dialog" aria-modal="true" aria-labelledby="zenrows-modal-title">
         <button className="zenrows-modal-close" type="button" onClick={onClose} aria-label="Закрыть">×</button>
         <div className="zenrows-modal-icon">!</div>
-        <span className="zenrows-eyebrow">ZenRows handler</span>
+        <span className="zenrows-eyebrow">{provider} handler</span>
         <h2 id="zenrows-modal-title">Карточку не удалось подтвердить</h2>
         <p className="zenrows-modal-lead">Мы получили ответ, но не пропустили его в preview: обязательные поля должны пройти проверку.</p>
 

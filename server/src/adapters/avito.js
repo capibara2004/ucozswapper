@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { upgradeAvitoImageUrl } from "../lib/imageQuality.js";
+import { pickLargestSrcsetUrl, upgradeAvitoImageUrl } from "../lib/imageQuality.js";
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -104,6 +104,25 @@ function decodeJsonString(value) {
   }
 }
 
+function cleanAvitoImageCandidate(value) {
+  return cleanText(value)
+    .replaceAll("\\u002F", "/")
+    .replaceAll("\\/", "/")
+    .replace(/[),;]+$/, "");
+}
+
+function splitImageCandidates(value) {
+  return String(value || "")
+    .split(",")
+    .map((entry) => cleanAvitoImageCandidate(entry.trim().split(/\s+/)[0]))
+    .filter(Boolean);
+}
+
+function getAvitoImageIdentity(value) {
+  const url = cleanAvitoImageCandidate(value);
+  return /\/image\/1\/1\.([A-Za-z0-9_-]{5})/.exec(url)?.[1] || "";
+}
+
 function extractEmbeddedAvitoTitle(html) {
   const matches = [...String(html || "").matchAll(/"(?:title|name|itemTitle)"\s*:\s*"((?:\\.|[^"\\])+)"/gi)];
   return matches
@@ -119,7 +138,36 @@ function isGenericAvitoDescription(text) {
 
 function extractEmbeddedAvitoImages(html) {
   return [...String(html || "").matchAll(/https?:\\?\/\\?\/[^\s"'<>\\]+(?:avito\.st|avatars\.mds\.yandex\.net|static\.avito\.ru)[^\s"'<>\\]*/gi)]
-    .map((match) => decodeJsonString(match[0]).replaceAll("\\u002F", "/").replaceAll("\\/", "/"));
+    .map((match) => cleanAvitoImageCandidate(decodeJsonString(match[0])));
+}
+
+function extractAvitoGalleryImages($, html) {
+  const galleryItems = $("[data-marker='image-preview/preview-wrapper'] [data-marker='image-preview/item'][data-type='image']")
+    .toArray()
+    .sort((left, right) => Number($(left).attr("data-index") || 0) - Number($(right).attr("data-index") || 0));
+  if (!galleryItems.length) return [];
+
+  const renderedImageUrls = new Set();
+  $("img").each((_, image) => {
+    for (const attribute of ["src", "srcset"]) {
+      splitImageCandidates($(image).attr(attribute)).forEach((url) => renderedImageUrls.add(url));
+    }
+  });
+
+  const embeddedImages = [...new Set(extractEmbeddedAvitoImages(html))];
+  return galleryItems.map((item) => {
+    const image = $(item).find("img[data-marker='image-preview/preview-image'], img").first();
+    const source = image.attr("srcset") || image.attr("src") || "";
+    const galleryFallback = normalizeImageUrl(pickLargestSrcsetUrl(source));
+    const identity = getAvitoImageIdentity(galleryFallback || source);
+    if (!identity) return galleryFallback;
+
+    const stateImage = embeddedImages.find((candidate) => (
+      getAvitoImageIdentity(candidate) === identity
+      && !renderedImageUrls.has(candidate)
+    ));
+    return normalizeImageUrl(stateImage || galleryFallback);
+  }).filter(Boolean);
 }
 
 function extractEmbeddedAvitoDescription(html) {
@@ -194,7 +242,7 @@ function buildAvitoProduct({ productUrl, fetchedAt, title, description, images, 
   };
 }
 
-function parseAvitoHtml(html, productUrl, fetchedAt, sourceMode = "zenrows") {
+export function parseAvitoHtml(html, productUrl, fetchedAt, sourceMode = "zenrows") {
   const $ = cheerio.load(html);
   const jsonLd = parseJsonLd($);
   const offers = Array.isArray(jsonLd.offers) ? jsonLd.offers[0] : jsonLd.offers || {};
@@ -236,6 +284,8 @@ function parseAvitoHtml(html, productUrl, fetchedAt, sourceMode = "zenrows") {
     ...[...html.matchAll(/https?:\/\/[^\s"'<>\\]+(?:img\.avito\.st|avito\.st\/image|avatars\.mds\.yandex\.net\/get-avito)[^\s"'<>\\]+/gi)].map((match) => match[0]),
     ...extractEmbeddedAvitoImages(html)
   ];
+  const galleryImages = extractAvitoGalleryImages($, html);
+  const productImages = galleryImages.length ? galleryImages : [...metaImages, ...htmlImages];
   const characteristics = [
     ...$("[data-marker='item-view/item-params'] li, [data-marker*='item-params'] li").toArray().map((element) => ({
       label: cleanText($(element).find("span").first().text()),
@@ -252,7 +302,7 @@ function parseAvitoHtml(html, productUrl, fetchedAt, sourceMode = "zenrows") {
   if (!title) warnings.push("Название не найдено в публичной разметке Avito.");
   if (!description) warnings.push("Описание не найдено в публичной разметке Avito.");
   if (!price) warnings.push("Цена не найдена в публичной разметке Avito.");
-  if (![...metaImages, ...htmlImages].filter(Boolean).length) warnings.push("Изображения не найдены в публичной разметке Avito.");
+  if (!productImages.length) warnings.push("Изображения не найдены в публичной разметке Avito.");
   if (!productId) warnings.push("ID объявления не найден в URL или метаданных Avito.");
 
   return buildAvitoProduct({
@@ -260,7 +310,7 @@ function parseAvitoHtml(html, productUrl, fetchedAt, sourceMode = "zenrows") {
     fetchedAt,
     title,
     description,
-    images: [...metaImages, ...htmlImages],
+    images: productImages,
     characteristics,
     price,
     productId,
@@ -316,45 +366,35 @@ export async function fetchAvitoProductViaZenRows(productUrl) {
     apikey: process.env.ZENROWS_API_KEY,
     url: productUrl,
     js_render: "true",
-    wait: "12000",
-    original_status: "true",
-    css_extractor: JSON.stringify({
-      title: "h1, h1[itemprop='name'], [data-marker='item-view/title-info'] h1, [data-marker='item-view/title-info']",
-      heading: "[data-marker='item-view/title-info'] h1, [data-marker='item-view/title-info'] span, title",
-      name: "[itemprop='name']",
-      price: "[itemprop='price']@content",
-      amount: "[data-marker='item-view/item-price'], [itemprop='price']",
-      offer_price: "meta[property='product:price:amount']@content, meta[itemprop='price']@content",
-      description: "[data-marker='item-view/item-description'] p, [data-marker='item-view/item-description']",
-      description_paragraphs: "[data-marker='item-view/item-description'] p",
-      description_block: "[data-marker='item-view/item-description'], [itemprop='description']",
-      description_text: "[itemprop='description'], meta[name='description']@content",
-      characteristics: "[data-marker='item-view/item-params'] li, [data-marker='item-view/item-params']",
-      image: "meta[property='og:image']@content, meta[name='twitter:image']@content",
-      image_src: "img[src*='avito']@src, img[src*='yandex']@src",
-      image_data: "img[data-src*='avito']@data-src, [data-marker*='gallery'] img@src",
-      gallery: "img[srcset*='avito']@srcset, [data-marker*='gallery'] img@srcset"
-    })
+    premium_proxy: "true",
+    proxy_country: "ru",
+    wait_for: "[data-marker='item-view/item-description']",
+    wait: "1000"
   });
 
   async function requestZenRows(searchParams) {
     const response = await fetch(`https://api.zenrows.com/v1/?${searchParams}`, {
-      signal: AbortSignal.timeout(90_000)
+      signal: AbortSignal.timeout(45_000)
     });
     const body = await response.text();
     if (!response.ok) {
       const detail = cleanText(body).slice(0, 240);
-      throw new Error(`ZenRows вернул HTTP ${response.status}${detail ? `: ${detail}` : "."}`);
+      const error = new Error(`ZenRows вернул HTTP ${response.status}${detail ? `: ${detail}` : "."}`);
+      error.statusCode = response.status;
+      throw error;
     }
     return { response, body };
   }
 
-  const { response, body } = await requestZenRows(params);
-  const contentType = response.headers.get("content-type") || "";
-  const fetchedAt = new Date().toISOString();
-  let product;
+  function parseZenRowsResult({ response, body }) {
+    const contentType = response.headers.get("content-type") || "";
+    const fetchedAt = new Date().toISOString();
+    if (!body) throw new Error("ZenRows не вернул HTML страницы Avito.");
 
-  if (contentType.includes("application/json") || body.trim().startsWith("{") || body.trim().startsWith("[")) {
+    if (!contentType.includes("application/json") && !body.trim().startsWith("{") && !body.trim().startsWith("[")) {
+      return parseAvitoHtml(body, productUrl, fetchedAt, "zenrows");
+    }
+
     let payload;
     try {
       payload = JSON.parse(body);
@@ -362,27 +402,43 @@ export async function fetchAvitoProductViaZenRows(productUrl) {
       throw new Error("ZenRows вернул некорректный JSON-ответ для Avito.");
     }
 
-    const html = payload.html || payload.data?.html || "";
+    const html = payload.html || payload.data?.html || payload.outputCode?.html || "";
     const extractedProduct = parseAvitoExtractedJson(payload, productUrl, fetchedAt);
-    product = html
+    return html
       ? mergeProducts(extractedProduct, parseAvitoHtml(html, productUrl, fetchedAt, "zenrows"))
       : extractedProduct;
-  } else if (body) {
-    product = parseAvitoHtml(body, productUrl, fetchedAt, "zenrows");
-  } else {
-    throw new Error("ZenRows не вернул HTML страницы Avito.");
   }
 
-  if (product.sourceStatus === "fetched") return product;
+  function productScore(product) {
+    if (!product) return 0;
+    return Number(Boolean(product.title && !isGenericAvitoTitle(product.title))) * 3
+      + Number(Boolean(product.description)) * 3
+      + Number(Boolean(product.price)) * 2
+      + Number(Boolean(product.images?.length)) * 2
+      + Number(Boolean(product.characteristics?.length));
+  }
 
-  const htmlParams = new URLSearchParams({
-    apikey: process.env.ZENROWS_API_KEY,
-    url: productUrl,
-    js_render: "true",
-    wait: "15000",
-    original_status: "true"
-  });
-  const htmlResult = await requestZenRows(htmlParams);
-  if (!htmlResult.body) return product;
-  return mergeProducts(product, parseAvitoHtml(htmlResult.body, productUrl, fetchedAt, "zenrows"));
+  let bestProduct = null;
+  let lastError = null;
+  const maxAttempts = 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const product = parseZenRowsResult(await requestZenRows(params));
+      if (productScore(product) > productScore(bestProduct)) bestProduct = product;
+      if (product.sourceStatus === "fetched" && product.description) {
+        if (attempt > 1) product.warnings.push(`Карточка Avito получена с попытки ${attempt} из ${maxAttempts}.`);
+        return product;
+      }
+    } catch (error) {
+      lastError = error;
+      const retryableStatus = !error.statusCode || error.statusCode === 408 || error.statusCode === 429 || error.statusCode >= 500;
+      if (!retryableStatus) throw error;
+    }
+  }
+
+  if (bestProduct) {
+    bestProduct.warnings.push("ZenRows исчерпал одну повторную попытку; использован наиболее полный ответ Avito.");
+    return bestProduct;
+  }
+  throw lastError || new Error("ZenRows не вернул карточку Avito после двух попыток.");
 }
